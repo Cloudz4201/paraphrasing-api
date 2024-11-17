@@ -5,7 +5,7 @@ from transformers import pipeline
 app = Flask(__name__)
 
 # Load model name and debug mode from environment variables
-model_name = os.getenv("MODEL_NAME", "t5-small")  # Default to "t5-small" if not set
+model_name = os.getenv("MODEL_NAME", "t5-small")  # Default to "t5-small"
 debug_mode = os.getenv("DEBUG", "False").lower() == "true"
 
 # Initialize the paraphrasing model
@@ -27,4 +27,6 @@ def paraphrase():
         return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=8080, debug=debug_mode)
+    # Use the PORT environment variable provided by Render or default to 8080
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host='0.0.0.0', port=port, debug=debug_mode)
