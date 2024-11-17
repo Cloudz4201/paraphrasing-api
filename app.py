@@ -1,16 +1,20 @@
+import os
 from flask import Flask, request, jsonify
 from transformers import pipeline
 
 app = Flask(__name__)
 
-# Load a paraphrasing model
-model_name = "t5-small"  # Replace with a better model if needed
+# Load model name and debug mode from environment variables
+model_name = os.getenv("MODEL_NAME", "t5-small")  # Default to "t5-small" if not set
+debug_mode = os.getenv("DEBUG", "False").lower() == "true"
+
+# Initialize the paraphrasing model
 paraphraser = pipeline("text2text-generation", model=model_name)
 
 @app.route('/paraphrase', methods=['POST'])
 def paraphrase():
     data = request.json
-    if 'text' not in data:
+    if not data or 'text' not in data:
         return jsonify({"error": "No text provided"}), 400
 
     original_text = data['text']
@@ -23,4 +27,4 @@ def paraphrase():
         return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=8080)
+    app.run(host='0.0.0.0', port=8080, debug=debug_mode)
