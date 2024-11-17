@@ -1,6 +1,7 @@
 import os
 from flask import Flask, request, jsonify
-from transformers import pipeline
+from transformers import AutoTokenizer, AutoModelForSeq2SeqGeneration
+import torch
 import logging
 
 # Configure logging
@@ -16,82 +17,72 @@ app = Flask(__name__)
 model_name = os.getenv("MODEL_NAME", "t5-small")
 debug_mode = os.getenv("DEBUG", "False").lower() == "true"
 
-# Initialize the paraphrasing model with specific configuration
+# Initialize the model and tokenizer
 try:
-    paraphraser = pipeline(
-        task="text2text-generation",
-        model=model_name,
-        framework="pt",  # Explicitly specify PyTorch
-        device=-1  # Use CPU, change to 0 for GPU if available
-    )
-    logger.info(f"Successfully initialized model: {model_name}")
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    model = AutoModelForSeq2SeqGeneration.from_pretrained(model_name)
+    logger.info(f"Successfully initialized model and tokenizer: {model_name}")
 except Exception as e:
-    logger.error(f"Failed to initialize model: {str(e)}")
-    paraphraser = None
+    logger.error(f"Failed to initialize model or tokenizer: {str(e)}")
+    model = None
+    tokenizer = None
 
-def preprocess_text(text):
-    """Prepare the input text for the T5 model."""
-    # T5 expects a specific prefix for different tasks
-    return f"paraphrase: {text}"
-
-def postprocess_text(model_output):
-    """Clean up the model output."""
-    if not model_output or not isinstance(model_output, list):
-        return None
-    
-    # Extract the generated text from the model output
+def generate_paraphrase(text):
+    """Generate paraphrase using T5 model."""
     try:
-        generated_text = model_output[0].get('generated_text', '').strip()
-        return generated_text if generated_text else None
-    except (IndexError, AttributeError) as e:
-        logger.error(f"Error in postprocessing: {str(e)}")
-        return None
+        # Prepare the input text
+        input_text = f"paraphrase: {text}"
+        
+        # Tokenize input
+        inputs = tokenizer(input_text, return_tensors="pt", padding=True, truncation=True, max_length=512)
+        
+        # Generate output
+        outputs = model.generate(
+            inputs.input_ids,
+            max_length=150,
+            num_beams=4,
+            temperature=0.7,
+            top_k=50,
+            top_p=0.95,
+            do_sample=True,
+            early_stopping=True,
+            num_return_sequences=1
+        )
+        
+        # Decode the output
+        paraphrased_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
+        logger.info(f"Generated paraphrase: {paraphrased_text}")
+        
+        return paraphrased_text
+        
+    except Exception as e:
+        logger.error(f"Error in generate_paraphrase: {str(e)}")
+        raise
 
 @app.route('/paraphrase', methods=['POST'])
 def paraphrase():
     """Handle paraphrasing requests."""
-    if paraphraser is None:
-        logger.error("Paraphrasing model not initialized")
+    if model is None or tokenizer is None:
+        logger.error("Model or tokenizer not initialized")
         return jsonify({"error": "Model is not initialized properly"}), 500
 
     # Validate request
-    data = request.get_json(silent=True)
-    if not data or not isinstance(data, dict):
-        return jsonify({"error": "Invalid JSON payload"}), 400
-    
-    text = data.get('text')
-    if not text or not isinstance(text, str):
-        return jsonify({"error": "No text provided or invalid text format"}), 400
-    
-    if len(text.strip()) == 0:
-        return jsonify({"error": "Empty text provided"}), 400
-
     try:
-        # Log input text for debugging
-        logger.info(f"Processing input text: {text[:100]}...")  # Log first 100 chars
+        data = request.get_json(silent=True)
+        if not data or not isinstance(data, dict):
+            return jsonify({"error": "Invalid JSON payload"}), 400
         
-        # Preprocess the input text
-        processed_input = preprocess_text(text)
+        text = data.get('text')
+        if not text or not isinstance(text, str):
+            return jsonify({"error": "No text provided or invalid text format"}), 400
         
-        # Generate paraphrased text with specific parameters
-        response = paraphraser(
-            processed_input,
-            max_length=min(len(text.split()) * 2, 512),  # Dynamic length with cap
-            num_return_sequences=1,
-            do_sample=True,
-            temperature=0.7,  # Control randomness
-            top_k=50,  # Limit vocabulary for better quality
-            top_p=0.95,  # Nucleus sampling
-            early_stopping=True
-        )
+        if len(text.strip()) == 0:
+            return jsonify({"error": "Empty text provided"}), 400
+
+        # Generate paraphrase
+        paraphrased_text = generate_paraphrase(text)
         
-        # Log raw model output for debugging
-        logger.info(f"Raw model output: {response}")
-        
-        # Process the model output
-        paraphrased_text = postprocess_text(response)
-        
-        if paraphrased_text is None:
+        if not paraphrased_text:
             return jsonify({"error": "Failed to generate paraphrased text"}), 500
         
         return jsonify({"paraphrased_text": paraphrased_text})
@@ -107,7 +98,7 @@ def health_check():
         "status": "healthy",
         "model": {
             "name": model_name,
-            "initialized": paraphraser is not None
+            "initialized": model is not None and tokenizer is not None
         }
     }
     return jsonify(status)
